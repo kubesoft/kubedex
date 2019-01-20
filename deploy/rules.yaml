@@ -1,0 +1,92 @@
+config:
+  <<:  (( &temporary(merge) ))
+  namespace: dex
+  kubectl_client_id: kubectl
+  dns_annotation: dns.gardener.cloud/dnsnames
+  images:
+    kubectlapp: mandelsoft/kubectl_app:latest
+    dex: quay.io/dexidp/dex:v2.10.0
+
+
+spec:
+  <<: (( &local ))
+  ca:
+    organization: Mandelsoft
+    commonName: dex:ca
+    privateKey: (( state.dex.cakey ))
+    isCA: true
+    usage:
+      - Signature
+      - KeyEncipherment
+  server:
+    organization: Mandelsoft
+    commonName: dex:idp
+    publicKey: (( state.dex.pub ))
+    caCert: (( state.dex.cacert ))
+    caPrivateKey: (( state.dex.cakey ))
+    validity: 8700
+    usage:
+      - ServerAuth
+      - KeyEncipherment
+    hosts:
+      - (( .dex.dns ))
+      - (( "dex." config.namespace ".svc.cluster.local" ))
+      - (( "dex." config.namespace ".svc.cluster" ))
+      - (( "dex." config.namespace ".svc" ))
+      - (( "dex." config.namespace ))
+      - "dex"
+
+  kubectl:
+    organization: Mandelsoft
+    commonName: kubectl:client
+    publicKey: (( state.kubectl.pub ))
+    caCert: (( state.kubectl.cacert ))
+    caPrivateKey: (( state.kubectl.cakey ))
+    validity: 8700
+    usage:
+      - ServerAuth
+      - KeyEncipherment
+    hosts:
+      - (( .kubectl.dns ))
+
+state:
+  dex:
+    cakey: (( x509genkey() ))
+    capub: (( x509publickey(cakey) ))
+
+    cacert: (( x509cert(spec.ca) ))
+
+    key: (( x509genkey(2048) ))
+    pub: (( x509publickey(key) ))
+
+    cert: (( x509cert(spec.server) ))
+                               
+  kubectl:
+    cakey: (( x509genkey() ))
+    capub: (( x509publickey(cakey) ))
+
+    cacert: (( x509cert(spec.ca) ))
+
+    key: (( x509genkey(2048) ))
+    pub: (( x509publickey(key) ))
+
+    cert: (( x509cert(spec.kubectl) ))
+
+dex:
+  dns: (( "dex." config.basedomain ))
+  issuer: (( "https://" dns ))
+  server:
+    crt: (( state.dex.cert ))
+    key: (( state.dex.key ))
+  cacert: (( state.dex.cacert ))
+   
+kubectl:
+  dns: (( "kubectl." config.basedomain ))
+  server:
+    url: (( "https://" dns ))
+    crt: (( state.kubectl.cert ))
+    key: (( state.kubectl.key ))
+  cacert: (( state.kubectl.cacert ))
+  callback: (( server.url "/callback" ))
+  client_id: (( config.kubectl_client_id ))
+  

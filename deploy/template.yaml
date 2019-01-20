@@ -1,0 +1,283 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: dex
+  name: dex
+  namespace: (( stub(config.namespace) ))
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dex-tls
+  namespace: (( stub(config.namespace) ))
+type: Opaque
+data:
+  tls.crt: (( base64(stub(dex.server.crt)) ))
+  tls.key: (( base64(stub(dex.server.key)) ))
+  tls.ca: (( base64(stub(dex.cacert)) ))
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-client
+  namespace: (( stub(config.namespace) ))
+type: Opaque
+data:
+  client-id: (( base64(stub(config.github.client-id)) ))
+  client-secret: (( base64(stub(config.github.client-secret)) ))
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: dex
+  name: dex
+  namespace: (( stub(config.namespace) ))
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      serviceAccountName: dex # This is created above
+      containers:
+      - image: (( stub(config.images.dex) ))
+        name: dex
+        command: ["/usr/local/bin/dex", "serve", "/etc/dex/cfg/config.yaml"]
+
+        ports:
+        - name: https
+          containerPort: 443
+
+        volumeMounts:
+        - name: config
+          mountPath: /etc/dex/cfg
+        - name: tls
+          mountPath: /etc/dex/tls
+
+        env:
+        - name: GITHUB_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: github-client
+              key: client-id
+        - name: GITHUB_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: github-client
+              key: client-secret
+      volumes:
+      - name: config
+        configMap:
+          name: dex
+          items:
+          - key: config.yaml
+            path: config.yaml
+      - name: tls
+        secret:
+          secretName: dex-tls
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: dex
+  namespace: (( stub(config.namespace) ))
+data:
+  config.yaml: (( asyaml(content) ))
+  content: 
+    <<: (( &local ))
+    issuer: (( stub(dex.issuer) ))
+    storage:
+      type: kubernetes
+      config:
+        inCluster: true
+    web:
+      https: 0.0.0.0:443
+      tlsCert: /etc/dex/tls/tls.crt
+      tlsKey: /etc/dex/tls/tls.key
+
+    connectors:
+    - type: github
+      id: github
+      name: GitHub
+      config:
+        clientID: $GITHUB_CLIENT_ID
+        clientSecret: $GITHUB_CLIENT_SECRET
+        redirectURI: (( stub(dex.issuer) "/callback" ))
+        orgs:
+        - name: (( stub(config.github.org) ))
+    oauth2:
+      skipApprovalScreen: true
+
+    enablePasswordDB: true
+
+    staticClients:
+    - id: (( stub(kubectl.client_id) ))
+      redirectURIs:
+      - (( stub(kubectl.callback) ))
+      name: 'KubeCtl App'
+      secret: (( stub(config.kubectl.client_secret) ))
+
+    staticPasswords:
+    - email: (( stub(config.static.email) ))
+      # bcrypt hash of the string "password"
+      hash: (( bcrypt(stub(config.static.password)) ))
+      username: "admin"
+      userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: (( stub(config.namespace) ))
+  annotations: (( { stub(config.dns_annotation)=stub(dex.dns) } ))
+spec:
+  type: LoadBalancer
+  ports:
+  - name: dex
+    port: 443
+    protocol: TCP
+    targetPort: 443
+  selector:
+    app: dex
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: dex
+rules:
+- apiGroups: ["dex.coreos.com"] # API group created by dex
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["create"] # To manage its own resources, dex must be able to create customresourcedefinitions
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: dex
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dex
+subjects:
+- kind: ServiceAccount
+  name: dex           # Service account assigned to the dex pod, created above
+  namespace: (( stub(config.namespace) ))
+---
+#
+#
+#
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubectl-tls
+  namespace: (( stub(config.namespace) ))
+type: Opaque
+data:
+  tls.crt: (( base64(stub(kubectl.server.crt)) ))
+  tls.key: (( base64(stub(kubectl.server.key)) ))
+  tls.ca: (( base64(stub(kubectl.cacert)) ))
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubectl-client
+  namespace: (( stub(config.namespace) ))
+type: Opaque
+data:
+  client-secret: (( base64(stub(config.kubectl.client_secret)) ))
+  issuer-cacert: (( base64(stub(dex.cacert)) ))
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: kubectl
+  name: kubectl
+  namespace: (( stub(config.namespace) ))
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubectl
+  namespace: (( stub(config.namespace) ))
+  annotations:
+    dns.gardener.cloud/dnsnames: (( stub(kubectl.dns) ))
+spec:
+  type: LoadBalancer
+  ports:
+  - name: kubectl
+    port: 443
+    protocol: TCP
+    targetPort: 443
+  selector:
+    app: kubectl
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: kubectl
+  name: kubectl
+  namespace: (( stub(config.namespace) ))
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: kubectl
+    spec:
+      serviceAccountName: kubectl # This is created above
+      containers:
+      - image: (( stub(config.images.kubectlapp) ))
+        name: kubectl
+        imagePullPolicy: "Always"
+        args:
+        - --client-id
+        - (( stub(kubectl.client_id) ))
+        - --client-secret
+        - "$(CLIENT_SECRET)"
+        - --redirect-uri
+        - (( stub(kubectl.callback) ))
+        - --issuer
+        - (( stub(dex.issuer) ))
+        - --listen
+        - https://0.0.0.0:443
+        - --tls-cert
+        -  /etc/app/tls/tls.crt
+        - --tls-key
+        -  /etc/app/tls/tls.key
+        - --issuer-root-ca
+        - /etc/app/client/issuer-cacert
+
+        ports:
+        - name: https
+          containerPort: 443
+
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/app/tls
+        - name: client
+          mountPath: /etc/app/client
+
+        env:
+        - name: CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: kubectl-client
+              key: client-secret
+      volumes:
+      - name: tls
+        secret:
+          secretName: kubectl-tls
+      - name: client
+        secret:
+          secretName: kubectl-client
+          items:
+          - key: issuer-cacert
+            path: issuer-cacert
